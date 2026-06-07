@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../../supabase'
 import ReactMarkdown from 'react-markdown'
 import Nav from '../../Nav'
@@ -18,13 +18,6 @@ interface Policy { id: string; title: string; content: string; order: number }
 
 function formatPrice(n: number) { return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
 
-function ChevronLeft({ color = '#fff' }: { color?: string }) {
-  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-}
-function ChevronRight({ color = '#fff' }: { color?: string }) {
-  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-}
-
 export default function ProductPage({ params }: { params: Promise<{ id: string }> }) {
   const [product, setProduct] = useState<Product | null>(null)
   const [variants, setVariants] = useState<Variant[]>([])
@@ -32,7 +25,11 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   const [similarProducts, setSimilarProducts] = useState<Product[]>([])
   const [showSimilar, setShowSimilar] = useState(true)
   const [policies, setPolicies] = useState<Policy[]>([])
-  const [mainImage, setMainImage] = useState(''); const [mainIndex, setMainIndex] = useState(0); const [thumbStart, setThumbStart] = useState(0)
+  const [mainImage, setMainImage] = useState(''); const [mainIndex, setMainIndex] = useState(0); const [thumbStart, setThumbStart] = useState(0); const [galleryHovered, setGalleryHovered] = useState(false)
+  const thumbStripRef = useRef<HTMLDivElement>(null)
+  const [transPhase, setTransPhase] = useState<'idle'|'prep'|'go'>('idle')
+  const nextImageRef = useRef('')
+  const transDirRef = useRef<'left'|'right'>('left')
   const [added, setAdded] = useState(false)
   const [settings, setSettings] = useState<any | null>(() => {
     if (typeof window !== 'undefined') { const c = localStorage.getItem('siteSettings'); if (c) try { return JSON.parse(c) } catch {} }
@@ -73,20 +70,27 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   function getAllImages() {
     if (!product) return []
     const base = product.images?.length ? product.images : [product.image_url]
+    // If a variant is selected and has its own image, put it first
     if (selectedVariant?.image_url) return [selectedVariant.image_url, ...base.filter(i => i !== selectedVariant.image_url)]
     return base
   }
-  function goToImage(index: number) {
-    const imgs = getAllImages(); const ni = (index + imgs.length) % imgs.length
-    setMainIndex(ni); setMainImage(imgs[ni])
-    // Keep thumbstrip in view
-    if (ni < thumbStart) setThumbStart(ni)
-    else if (ni >= thumbStart + thumbsToShow) setThumbStart(ni - thumbsToShow + 1)
+  function goToImage(index: number, direction: 'left' | 'right' = 'left') {
+    const imgs = getAllImages()
+    const ni = (index + imgs.length) % imgs.length
+    if (ni === mainIndex || transPhase !== 'idle') return
+    nextImageRef.current = imgs[ni]
+    transDirRef.current = direction
+    setMainIndex(ni)
+    setTransPhase('prep')
+    requestAnimationFrame(() => requestAnimationFrame(() => setTransPhase('go')))
+  }
+  function onGalleryTransitionEnd() {
+    if (transPhase === 'go') { setMainImage(nextImageRef.current); setTransPhase('idle') }
   }
 
   function selectVariant(v: Variant) {
     setSelectedVariant(v)
-    if (v.image_url) { setMainImage(v.image_url); setMainIndex(0) }
+    if (v.image_url) { nextImageRef.current = v.image_url; setMainImage(v.image_url); setMainIndex(0); setTransPhase('idle') }
   }
 
   function addToCart() {
@@ -94,6 +98,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
     if (product.has_variants && !selectedVariant) { alert('Please select an option first.'); return }
     const stored = localStorage.getItem('cart'); const cart = stored ? JSON.parse(stored) : []
     const price = selectedVariant?.price_override ?? product.sale_price ?? product.price
+    const cartKey = selectedVariant ? selectedVariant.id : product.id
     const existing = cart.find((x: any) => selectedVariant ? x.variant_id === selectedVariant.id : x.id === product.id && !x.variant_id)
     const newItem = { id: product.id, name: product.name, price, qty: 1, image_url: selectedVariant?.image_url || product.image_url, category: product.category, stock: selectedVariant ? selectedVariant.stock : product.stock, ...(selectedVariant ? { variant_id: selectedVariant.id, variant_label: selectedVariant.label } : {}) }
     const updated = existing ? cart.map((x: any) => (selectedVariant ? x.variant_id === selectedVariant.id : x.id === product.id && !x.variant_id) ? { ...x, qty: x.qty + 1 } : x) : [...cart, newItem]
@@ -131,33 +136,11 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
     ? selectedVariant ? selectedVariant.stock === 0 : false
     : product.stock === 0 || product.sold
 
-  // Nav arrow button style (on top of main image)
-  const mainNavBtn = (side: 'left' | 'right'): React.CSSProperties => ({
-    position: 'absolute', [side]: 12, top: '50%', transform: 'translateY(-50%)',
-    background: 'rgba(15,15,15,0.52)', backdropFilter: 'blur(6px)',
-    border: '1.5px solid rgba(255,255,255,0.22)',
-    borderRadius: 10, width: 44, height: 44, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    boxShadow: '0 2px 16px rgba(0,0,0,0.22)', zIndex: 2, transition: 'background 0.15s',
-  })
-
-  // Thumb strip nav button style
-  const thumbNavBtn = (disabled: boolean): React.CSSProperties => ({
-    background: disabled ? t.bg_card : t.text_primary,
-    border: `1.5px solid ${t.border_card_color}`,
-    borderRadius: 8, width: 36, height: 36,
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    flexShrink: 0, opacity: disabled ? 0.35 : 1, transition: 'all 0.15s',
-  })
-
   return (
     <div style={{ fontFamily: t.font_body, background: t.bg_page, minHeight: '100vh' }}>
       <style dangerouslySetInnerHTML={{ __html: `
         :root { --accent: ${accent}; }
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Lato:wght@400;700&family=Montserrat:wght@400;600;700;900&family=Playfair+Display:wght@400;700&display=swap');
-        .main-nav-btn:hover { background: rgba(15,15,15,0.82) !important; }
-        .thumb-nav-btn:hover:not(:disabled) { opacity: 0.85 !important; }
       ` }} />
       <Nav />
 
@@ -169,60 +152,117 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: isMobile ? 24 : 40, alignItems: 'start' }}>
           {/* IMAGE GALLERY */}
           <div>
-            {/* Main image */}
-            <div style={{ position: 'relative', borderRadius: t.radius_card, overflow: 'hidden', background: t.bg_card, boxShadow: shadow, marginBottom: 12 }}>
-              <img src={mainImage || 'https://via.placeholder.com/600x500?text=No+Image'} alt={product.name}
-                style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }} />
+            {/* Outer wrapper handles hover — no overflow:hidden so arrows aren't clipped */}
+            <div
+              onMouseEnter={() => setGalleryHovered(true)}
+              onMouseLeave={() => setGalleryHovered(false)}
+              style={{ position: 'relative', marginBottom: 12 }}>
+              {/* Inner wrapper clips the image transitions */}
+              <div style={{ position: 'relative', borderRadius: t.radius_card, overflow: 'hidden', background: t.bg_card, boxShadow: shadow, perspective: '1200px' }}>
+              {(() => {
+                const transitionType = settings?.product_transition || 'fade'
+                const tr = transPhase === 'go' ? '0.6s cubic-bezier(0.4,0,0.2,1)' : 'none'
+                const dir = transDirRef.current
 
+                function imgStyle(isActive: boolean): React.CSSProperties {
+                  const base: React.CSSProperties = { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', touchAction: 'pan-y', userSelect: 'none' }
+                  if (transitionType === 'slide') {
+                    const tx = isActive
+                      ? (transPhase === 'go' ? (dir === 'left' ? '-100%' : '100%') : '0%')
+                      : (transPhase === 'prep' ? (dir === 'left' ? '100%' : '-100%') : '0%')
+                    return { ...base, transform: `translateX(${tx})`, transition: transPhase === 'go' ? `transform ${tr}` : 'none', zIndex: isActive ? 1 : 2 }
+                  }
+                  if (transitionType === 'zoom') return {
+                    ...base, opacity: isActive ? (transPhase === 'go' ? 0 : 1) : (transPhase === 'prep' ? 0 : transPhase === 'go' ? 1 : 0),
+                    transform: isActive ? (transPhase === 'go' ? 'scale(0.9)' : 'scale(1)') : (transPhase === 'prep' ? 'scale(0.9)' : 'scale(1)'),
+                    transition: transPhase === 'go' ? `opacity ${tr}, transform ${tr}` : 'none', zIndex: isActive ? 1 : 2
+                  }
+                  if (transitionType === 'flip') return {
+                    ...base, opacity: isActive ? (transPhase === 'go' ? 0 : 1) : (transPhase === 'prep' ? 0 : transPhase === 'go' ? 1 : 0),
+                    transform: isActive ? (transPhase === 'go' ? (dir === 'left' ? 'rotateY(-90deg)' : 'rotateY(90deg)') : 'rotateY(0deg)') : (transPhase === 'prep' ? (dir === 'left' ? 'rotateY(90deg)' : 'rotateY(-90deg)') : 'rotateY(0deg)'),
+                    transition: transPhase === 'go' ? `opacity ${tr}, transform ${tr}` : 'none', zIndex: isActive ? 1 : 2
+                  }
+                  return { ...base, opacity: isActive ? (transPhase === 'go' ? 0 : 1) : (transPhase === 'prep' ? 0 : transPhase === 'go' ? 1 : 0), transition: transPhase === 'go' ? `opacity ${tr}` : 'none', zIndex: isActive ? 1 : 2 }
+                }
+
+                return (
+                  <>
+                    <img src={mainImage || 'https://via.placeholder.com/600x500?text=No+Image'} alt={product.name}
+                      style={{ ...imgStyle(true), aspectRatio: isMobile ? '4/3' : '1', position: transPhase !== 'idle' ? 'absolute' : 'relative' }}
+                      onTransitionEnd={onGalleryTransitionEnd}
+                      onTouchStart={e => { (e.currentTarget as any)._touchX = e.touches[0].clientX }}
+                      onTouchEnd={e => {
+                        const startX = (e.currentTarget as any)._touchX; if (startX == null) return
+                        const diff = startX - e.changedTouches[0].clientX
+                        if (Math.abs(diff) > 40) goToImage(diff > 0 ? mainIndex + 1 : mainIndex - 1, diff > 0 ? 'left' : 'right')
+                      }}
+                    />
+                    {transPhase !== 'idle' && (
+                      <img src={nextImageRef.current} alt={product.name + ' next'}
+                        style={{ ...imgStyle(false), aspectRatio: isMobile ? '4/3' : '1' }} />
+                    )}
+                    {transPhase !== 'idle' && <div style={{ width: '100%', aspectRatio: isMobile ? '4/3' : '1' }} />}
+                  </>
+                )
+              })()}
+              </div>
+
+              {/* Arrows — outside overflow:hidden div, shown on hover */}
               {allImages.length > 1 && (
                 <>
-                  {/* Prev button */}
-                  <button className="main-nav-btn" onClick={() => goToImage(mainIndex - 1)} style={mainNavBtn('left')}>
-                    <ChevronLeft />
-                  </button>
-                  {/* Next button */}
-                  <button className="main-nav-btn" onClick={() => goToImage(mainIndex + 1)} style={mainNavBtn('right')}>
-                    <ChevronRight />
-                  </button>
-                  {/* Dot strip */}
-                  <div style={{ position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 5, zIndex: 2 }}>
-                    {allImages.map((_, i) => (
-                      <button key={i} onClick={() => goToImage(i)} style={{ width: i === mainIndex ? 22 : 8, height: 8, borderRadius: 4, background: i === mainIndex ? '#fff' : 'rgba(255,255,255,0.42)', border: 'none', cursor: 'pointer', padding: 0, transition: 'all 0.2s', boxShadow: '0 1px 4px rgba(0,0,0,0.25)' }} />
-                    ))}
-                  </div>
+                  <button onClick={() => goToImage(mainIndex - 1, 'right')} style={{ position: 'absolute', left: -16, top: '50%', transform: 'translateY(-50%)', background: t.bg_card, border: `1px solid ${t.border_card_color}`, borderRadius: '50%', width: 36, height: 36, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', opacity: galleryHovered ? 1 : 0, transition: 'opacity 0.2s ease', pointerEvents: galleryHovered ? 'auto' : 'none', zIndex: 10, color: t.text_primary }}>←</button>
+                  <button onClick={() => goToImage(mainIndex + 1, 'left')} style={{ position: 'absolute', right: -16, top: '50%', transform: 'translateY(-50%)', background: t.bg_card, border: `1px solid ${t.border_card_color}`, borderRadius: '50%', width: 36, height: 36, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', opacity: galleryHovered ? 1 : 0, transition: 'opacity 0.2s ease', pointerEvents: galleryHovered ? 'auto' : 'none', zIndex: 10, color: t.text_primary }}>→</button>
                 </>
               )}
             </div>
 
-            {/* Thumbnail strip */}
+            {/* Thumbnail strip — 5 visible, arrows on desktop, drag-scroll on mobile */}
             {allImages.length > 1 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {allImages.length > thumbsToShow && (
-                  <button className="thumb-nav-btn" onClick={() => setThumbStart(Math.max(0, thumbStart - 1))}
-                    disabled={thumbStart === 0} style={thumbNavBtn(thumbStart === 0)}>
-                    <ChevronLeft color={thumbStart === 0 ? t.text_secondary : '#fff'} />
-                  </button>
-                )}
-
-                <div style={{ display: 'flex', gap: 8, flex: 1, overflow: 'hidden' }}>
-                  {allImages.slice(thumbStart, thumbStart + thumbsToShow).map((img, i) => {
-                    const ai = thumbStart + i
-                    const active = ai === mainIndex
-                    return (
-                      <div key={ai} onClick={() => goToImage(ai)}
-                        style={{ width: `calc(${100 / thumbsToShow}% - 6px)`, aspectRatio: '1', borderRadius: Math.max(t.radius_image, 6), overflow: 'hidden', cursor: 'pointer', flexShrink: 0, border: active ? `2.5px solid ${accent}` : `2px solid ${t.border_card_color}`, boxShadow: active ? `0 0 0 2px ${accent}33` : 'none', transition: 'border-color 0.15s, box-shadow 0.15s' }}>
-                        <img src={img} alt={`View ${ai + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-                      </div>
-                    )
-                  })}
-                </div>
-
-                {allImages.length > thumbsToShow && (
-                  <button className="thumb-nav-btn" onClick={() => setThumbStart(Math.min(allImages.length - thumbsToShow, thumbStart + 1))}
-                    disabled={thumbStart >= allImages.length - thumbsToShow}
-                    style={thumbNavBtn(thumbStart >= allImages.length - thumbsToShow)}>
-                    <ChevronRight color={thumbStart >= allImages.length - thumbsToShow ? t.text_secondary : '#fff'} />
-                  </button>
+              <div style={{ marginTop: 8 }}>
+                {isMobile ? (
+                  // Mobile: show 5 at a time, drag to scroll through them
+                  <div style={{ overflow: 'hidden' }}>
+                    <div
+                      ref={thumbStripRef}
+                      onTouchStart={e => {
+                        const el = thumbStripRef.current; if (!el) return
+                        const startX = e.touches[0].pageX; const startScroll = el.scrollLeft
+                        const onMove = (ev: TouchEvent) => { el.scrollLeft = startScroll - (ev.touches[0].pageX - startX) }
+                        const onEnd = () => { el.removeEventListener('touchmove', onMove); el.removeEventListener('touchend', onEnd) }
+                        el.addEventListener('touchmove', onMove, { passive: true })
+                        el.addEventListener('touchend', onEnd)
+                      }}
+                      style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', userSelect: 'none', WebkitOverflowScrolling: 'touch' } as React.CSSProperties}>
+                      {allImages.map((img, ai) => (
+                        <img key={ai} src={img} alt={`Thumb ${ai + 1}`}
+                          onClick={() => goToImage(ai, ai > mainIndex ? 'left' : 'right')}
+                          draggable={false}
+                          style={{ width: `calc(${100 / 5}% - 5px)`, flexShrink: 0, aspectRatio: '1', objectFit: 'cover', borderRadius: t.radius_image, cursor: 'pointer', border: ai === mainIndex ? `2px solid ${accent}` : `2px solid transparent`, opacity: ai === mainIndex ? 1 : 0.7, transition: 'all 0.15s' }} />
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  // Desktop: show 5 at a time with prev/next arrows
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button
+                      onClick={() => setThumbStart(s => Math.max(0, s - 1))}
+                      disabled={thumbStart === 0}
+                      style={{ background: t.bg_card, border: `1px solid ${t.border_card_color}`, borderRadius: '50%', width: 32, height: 32, flexShrink: 0, cursor: thumbStart === 0 ? 'not-allowed' : 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: thumbStart === 0 ? 0.3 : 1, color: t.text_primary, transition: 'opacity 0.15s' }}>←</button>
+                    <div style={{ display: 'flex', gap: 8, flex: 1, overflow: 'hidden' }}>
+                      {allImages.slice(thumbStart, thumbStart + 5).map((img, i) => {
+                        const ai = thumbStart + i
+                        return (
+                          <img key={ai} src={img} alt={`Thumb ${ai + 1}`}
+                            onClick={() => goToImage(ai, ai > mainIndex ? 'left' : 'right')}
+                            style={{ width: `calc(${100 / 5}% - 7px)`, aspectRatio: '1', flexShrink: 0, objectFit: 'cover', borderRadius: t.radius_image, cursor: 'pointer', border: ai === mainIndex ? `2px solid ${accent}` : `2px solid transparent`, opacity: ai === mainIndex ? 1 : 0.7, transition: 'all 0.15s' }} />
+                        )
+                      })}
+                    </div>
+                    <button
+                      onClick={() => setThumbStart(s => Math.min(allImages.length - 5, s + 1))}
+                      disabled={thumbStart >= allImages.length - 5}
+                      style={{ background: t.bg_card, border: `1px solid ${t.border_card_color}`, borderRadius: '50%', width: 32, height: 32, flexShrink: 0, cursor: thumbStart >= allImages.length - 5 ? 'not-allowed' : 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: thumbStart >= allImages.length - 5 ? 0.3 : 1, color: t.text_primary, transition: 'opacity 0.15s' }}>→</button>
+                  </div>
                 )}
               </div>
             )}
@@ -233,10 +273,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
             <p style={{ fontSize: 12, color: t.text_secondary, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>{product.category}</p>
             <h1 style={{ fontFamily: t.font_heading, fontSize: 28, letterSpacing: -0.5, marginBottom: 12, lineHeight: 1.3, color: t.text_primary, fontWeight: t.font_weight_heading }}>{product.name}</h1>
 
-            <p style={{ fontSize: t.font_size_price + 10, fontWeight: 700, color: priceColor, marginBottom: 20 }}>
-              ${formatPrice(displayPrice)}
-              {selectedVariant?.price_override && <span style={{ fontSize: 13, color: t.text_secondary, fontWeight: 400, marginLeft: 8 }}>for {selectedVariant.label}</span>}
-            </p>
+            <p style={{ fontSize: t.font_size_price + 10, fontWeight: 700, color: priceColor, marginBottom: 20 }}>${formatPrice(displayPrice)}{selectedVariant?.price_override && <span style={{ fontSize: 13, color: t.text_secondary, fontWeight: 400, marginLeft: 8 }}>for {selectedVariant.label}</span>}</p>
 
             {/* VARIANT SELECTOR */}
             {product.has_variants && variants.length > 0 && (
@@ -249,8 +286,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
                     const selected = selectedVariant?.id === v.id
                     const oos = v.stock === 0
                     return (
-                      <button key={v.id} onClick={() => !oos && selectVariant(v)}
-                        style={{ padding: '8px 16px', borderRadius: t.radius_btn, border: selected ? `2px solid ${accent}` : `1px solid ${t.border_card_color}`, background: selected ? accent + '12' : t.bg_card, color: oos ? '#bbb' : t.text_primary, fontSize: 13, fontWeight: selected ? 700 : 500, cursor: oos ? 'not-allowed' : 'pointer', opacity: oos ? 0.5 : 1, textDecoration: oos ? 'line-through' : 'none', transition: 'all 0.15s' }}>
+                      <button key={v.id} onClick={() => !oos && selectVariant(v)} style={{ padding: '8px 16px', borderRadius: t.radius_btn, border: selected ? `2px solid ${accent}` : `1px solid ${t.border_card_color}`, background: selected ? accent + '12' : t.bg_card, color: oos ? '#bbb' : t.text_primary, fontSize: 13, fontWeight: selected ? 700 : 500, cursor: oos ? 'not-allowed' : 'pointer', opacity: oos ? 0.5 : 1, textDecoration: oos ? 'line-through' : 'none', transition: 'all 0.15s' }}>
                         {v.label}{oos ? ' — Out of Stock' : ''}
                       </button>
                     )

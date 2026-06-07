@@ -52,41 +52,161 @@ function applySort(items: Product[], sortValue: string): Product[] {
 }
 
 // ── Image Carousel Banner ─────────────────────────────────────────────────
-function BannerCarousel({ images, interval, accent, radius, ratio }: { images: { url: string; link: string }[]; interval: number; accent: string; radius: number; ratio: string }) {
-  const [current, setCurrent] = useState(0)
+function BannerCarousel({ images, interval, accent, radius, ratio, transition: transitionType = 'fade' }: { images: { url: string; link: string }[]; interval: number; accent: string; radius: number; ratio: string; transition?: string }) {
+  const [idx, setIdx] = useState(0)           // current index
+  const [phase, setPhase] = useState<'idle'|'prep'|'go'>('idle')
+  const nextIdxRef = useRef(0)
+  const dirRef = useRef<'left'|'right'>('left')
   const [paused, setPaused] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const touchXRef = useRef<number | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const next = useCallback(() => setCurrent(c => (c + 1) % images.length), [images.length])
-  const prev = useCallback(() => setCurrent(c => (c - 1 + images.length) % images.length), [images.length])
+  // Two-phase animation:
+  // Phase 1 "prep": instantly position the new slide off-screen (no transition)
+  // Phase 2 "go":  animate both slides to their final positions (with transition)
+  function goTo(newIdx: number, direction: 'left' | 'right') {
+    if (phase !== 'idle' || images.length <= 1) return
+    const ni = (newIdx + images.length) % images.length
+    if (ni === idx) return
+    nextIdxRef.current = ni
+    dirRef.current = direction
+    setPhase('prep')
+    // One frame later, start the animation
+    requestAnimationFrame(() => requestAnimationFrame(() => setPhase('go')))
+  }
+
+  function next() { goTo(idx + 1, 'left') }
+  function prev() { goTo(idx - 1, 'right') }
+
+  // When animation ends, snap to idle
+  function onTransitionEnd() {
+    if (phase === 'go') {
+      setIdx(nextIdxRef.current)
+      setPhase('idle')
+    }
+  }
 
   useEffect(() => {
-    if (paused || images.length <= 1) return
+    if (paused || images.length <= 1 || phase !== 'idle') return
     timerRef.current = setInterval(next, interval * 1000)
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [paused, images.length, interval, next])
+  }, [paused, images.length, interval, idx, phase])
 
   if (!images.length) return null
+  const currentItem = images[idx]
+  const nextItem = images[nextIdxRef.current]
+  const dir = dirRef.current
 
-  const currentItem = images[current]
+  // Position of each slide based on phase
+  function getTransform(isActive: boolean): string {
+    if (phase === 'idle') return isActive ? 'translateX(0%)' : 'translateX(100%)'
+    if (phase === 'prep') {
+      // prep: active stays put, incoming snaps off-screen (no transition)
+      if (isActive) return 'translateX(0%)'
+      return dir === 'left' ? 'translateX(100%)' : 'translateX(-100%)'
+    }
+    // go: active slides out, incoming slides in
+    if (isActive) return dir === 'left' ? 'translateX(-100%)' : 'translateX(100%)'
+    return 'translateX(0%)'
+  }
+
+  function getOpacity(isActive: boolean): number {
+    if (transitionType === 'fade' || transitionType === 'zoom' || transitionType === 'flip') {
+      if (phase === 'idle') return isActive ? 1 : 0
+      if (phase === 'prep') return isActive ? 1 : 0  // incoming starts invisible
+      return isActive ? 0 : 1  // active fades out, incoming fades in
+    }
+    return 1  // slide: no opacity change
+  }
+
+  function getScale(isActive: boolean): string {
+    if (transitionType !== 'zoom') return 'scale(1)'
+    if (phase === 'idle') return isActive ? 'scale(1)' : 'scale(0.9)'
+    if (phase === 'prep') return isActive ? 'scale(1)' : 'scale(0.9)'
+    return isActive ? 'scale(0.9)' : 'scale(1)'
+  }
+
+  function getRotateY(isActive: boolean): string {
+    if (transitionType !== 'flip') return 'rotateY(0deg)'
+    if (phase === 'idle') return isActive ? 'rotateY(0deg)' : (dir === 'left' ? 'rotateY(90deg)' : 'rotateY(-90deg)')
+    if (phase === 'prep') return isActive ? 'rotateY(0deg)' : (dir === 'left' ? 'rotateY(90deg)' : 'rotateY(-90deg)')
+    return isActive ? (dir === 'left' ? 'rotateY(-90deg)' : 'rotateY(90deg)') : 'rotateY(0deg)'
+  }
+
+  function slideStyle(isActive: boolean): React.CSSProperties {
+    const tr = phase === 'go' ? '0.6s cubic-bezier(0.4,0,0.2,1)' : 'none'
+    const base: React.CSSProperties = {
+      position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover',
+      zIndex: isActive ? 1 : 2,  // incoming on top
+    }
+    if (transitionType === 'slide') return {
+      ...base,
+      transform: getTransform(isActive),
+      transition: phase === 'go' ? `transform ${tr}` : 'none',
+    }
+    if (transitionType === 'fade') return {
+      ...base,
+      opacity: getOpacity(isActive),
+      transition: phase === 'go' ? `opacity ${tr}` : 'none',
+    }
+    if (transitionType === 'zoom') return {
+      ...base,
+      opacity: getOpacity(isActive),
+      transform: getScale(isActive),
+      transition: phase === 'go' ? `opacity ${tr}, transform ${tr}` : 'none',
+    }
+    if (transitionType === 'flip') return {
+      ...base,
+      opacity: getOpacity(isActive),
+      transform: getRotateY(isActive),
+      transition: phase === 'go' ? `opacity ${tr}, transform ${tr}` : 'none',
+    }
+    return { ...base, opacity: getOpacity(isActive), transition: phase === 'go' ? `opacity ${tr}` : 'none' }
+  }
+
+  const arrowStyle = (side: 'left' | 'right'): React.CSSProperties => ({
+    position: 'absolute', [side]: 14, top: '50%', transform: 'translateY(-50%)',
+    background: 'rgba(0,0,0,0.45)', border: 'none', borderRadius: '50%',
+    width: 40, height: 40, cursor: 'pointer', color: '#fff', fontSize: 20,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 10, backdropFilter: 'blur(4px)',
+    opacity: hovered ? 1 : 0, transition: 'opacity 0.2s ease',
+    pointerEvents: hovered ? 'auto' : 'none',
+  })
 
   const inner = (
     <div
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      style={{ position: 'relative', borderRadius: radius, overflow: 'hidden', aspectRatio: ratio, background: '#111', userSelect: 'none', cursor: currentItem.link ? 'pointer' : 'default' }}>
-      {images.map((item, i) => (
-        <img key={i} src={item.url} alt={`Banner ${i + 1}`}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: i === current ? 1 : 0, transition: 'opacity 0.7s ease' }} />
-      ))}
+      onMouseEnter={() => { setPaused(true); setHovered(true) }}
+      onMouseLeave={() => { setPaused(false); setHovered(false) }}
+      onTouchStart={e => { touchXRef.current = e.touches[0].clientX }}
+      onTouchEnd={e => {
+        if (touchXRef.current == null) return
+        const diff = touchXRef.current - e.changedTouches[0].clientX
+        if (Math.abs(diff) > 40) diff > 0 ? next() : prev()
+        touchXRef.current = null
+      }}
+      style={{ position: 'relative', borderRadius: radius, overflow: 'hidden', aspectRatio: ratio, background: '#111', userSelect: 'none', cursor: currentItem.link ? 'pointer' : 'default', perspective: '1200px' }}>
+
+      {/* Current (outgoing) slide */}
+      <img src={currentItem.url} alt="Banner"
+        style={slideStyle(true) as any}
+        onTransitionEnd={onTransitionEnd} />
+
+      {/* Next (incoming) slide — only rendered during animation */}
+      {phase !== 'idle' && (
+        <img src={nextItem.url} alt="Banner next"
+          style={slideStyle(false) as any} />
+      )}
+
       {images.length > 1 && (
         <>
-          <button onClick={e => { e.preventDefault(); e.stopPropagation(); prev() }} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', background: 'rgba(0,0,0,0.45)', border: 'none', borderRadius: '50%', width: 40, height: 40, cursor: 'pointer', color: '#fff', fontSize: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2, backdropFilter: 'blur(4px)' }}>‹</button>
-          <button onClick={e => { e.preventDefault(); e.stopPropagation(); next() }} style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', background: 'rgba(0,0,0,0.45)', border: 'none', borderRadius: '50%', width: 40, height: 40, cursor: 'pointer', color: '#fff', fontSize: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2, backdropFilter: 'blur(4px)' }}>›</button>
-          <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 6, zIndex: 2 }}>
+          <button onClick={e => { e.preventDefault(); e.stopPropagation(); prev() }} style={arrowStyle('left')}>&#8249;</button>
+          <button onClick={e => { e.preventDefault(); e.stopPropagation(); next() }} style={arrowStyle('right')}>&#8250;</button>
+          <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 6, zIndex: 10 }}>
             {images.map((_, i) => (
-              <button key={i} onClick={e => { e.preventDefault(); e.stopPropagation(); setCurrent(i) }}
-                style={{ width: i === current ? 22 : 8, height: 8, borderRadius: 4, background: i === current ? '#fff' : 'rgba(255,255,255,0.45)', border: 'none', cursor: 'pointer', padding: 0, transition: 'all 0.25s', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' }} />
+              <button key={i} onClick={e => { e.preventDefault(); e.stopPropagation(); goTo(i, i > idx ? 'left' : 'right') }}
+                style={{ width: i === idx ? 22 : 8, height: 8, borderRadius: 4, background: i === idx ? '#fff' : 'rgba(255,255,255,0.45)', border: 'none', cursor: 'pointer', padding: 0, transition: 'all 0.25s', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' }} />
             ))}
           </div>
         </>
@@ -98,7 +218,6 @@ function BannerCarousel({ images, interval, accent, radius, ratio }: { images: {
     ? <a href={currentItem.link} target={currentItem.link.startsWith('http') ? '_blank' : '_self'} rel="noopener noreferrer" style={{ display: 'block', textDecoration: 'none' }}>{inner}</a>
     : inner
 }
-
 function VideoOverlay({ videoUrl, thumbnailUrl }: { videoUrl: string; thumbnailUrl: string }) {
   return <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9' }}><video src={videoUrl} controls playsInline poster={thumbnailUrl} style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} /></div>
 }
@@ -217,6 +336,7 @@ export default function Home() {
   const bannerInterval: number = settings?.banner_interval || 3
   const bannerRatio: string = settings?.banner_ratio || '16/5'
   const bannerPosition: string = settings?.banner_position || 'below_hero'
+  const bannerTransition: string = settings?.banner_transition || 'fade'
 
   const enabledSortOptions = sortOptions.filter(o => o.enabled)
   const filtered = products.filter(p => {
@@ -371,7 +491,7 @@ export default function Home() {
         {/* Banner — Above Hero */}
         {bannerActive && bannerImages.length > 0 && bannerPosition === 'above_hero' && (
           <div style={{ marginBottom: t.section_gap }}>
-            <BannerCarousel images={bannerImages} interval={bannerInterval} accent={accent} radius={t.radius_card} ratio={bannerRatio} />
+            <BannerCarousel images={bannerImages} interval={bannerInterval} accent={accent} radius={t.radius_card} ratio={bannerRatio} transition={bannerTransition} />
           </div>
         )}
 
@@ -394,7 +514,7 @@ export default function Home() {
         {/* Banner — Below Hero */}
         {bannerActive && bannerImages.length > 0 && bannerPosition === 'below_hero' && (
           <div style={{ marginBottom: t.section_gap }}>
-            <BannerCarousel images={bannerImages} interval={bannerInterval} accent={accent} radius={t.radius_card} ratio={bannerRatio} />
+            <BannerCarousel images={bannerImages} interval={bannerInterval} accent={accent} radius={t.radius_card} ratio={bannerRatio} transition={bannerTransition} />
           </div>
         )}
 
@@ -409,7 +529,7 @@ export default function Home() {
         {/* Banner — Above Products */}
         {bannerActive && bannerImages.length > 0 && bannerPosition === 'above_products' && (
           <div style={{ marginBottom: t.section_gap }}>
-            <BannerCarousel images={bannerImages} interval={bannerInterval} accent={accent} radius={t.radius_card} ratio={bannerRatio} />
+            <BannerCarousel images={bannerImages} interval={bannerInterval} accent={accent} radius={t.radius_card} ratio={bannerRatio} transition={bannerTransition} />
           </div>
         )}
 
@@ -485,7 +605,7 @@ export default function Home() {
       {/* Banner — Below Products */}
       {bannerActive && bannerImages.length > 0 && bannerPosition === 'below_products' && (
         <div style={{ maxWidth: t.page_max_width, margin: '0 auto', padding: '0 24px', marginBottom: 32 }}>
-          <BannerCarousel images={bannerImages} interval={bannerInterval} accent={accent} radius={t.radius_card} ratio={bannerRatio} />
+          <BannerCarousel images={bannerImages} interval={bannerInterval} accent={accent} radius={t.radius_card} ratio={bannerRatio} transition={bannerTransition} />
         </div>
       )}
       <StoreFooter policies={policies} accent={accent} t={t} showEmailSignup={settings?.show_email_signup !== false && settings?.show_contact_feature !== false} showContactFeature={settings?.show_contact_feature !== false} />

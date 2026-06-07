@@ -152,7 +152,7 @@ export default function DevPage() {
   const [settingsId, setSettingsId] = useState<string>('')
   const [settingsForm, setSettingsForm] = useState({
     store_name: '', accent_color: '#C0392B', hero_headline: '', hero_subtext: '',
-    hero_emoji: '', hero_image_url: '', media_active: false, media_type: 'image',
+    hero_emoji: '', hero_image_url: '', favicon_url: '', media_active: false, media_type: 'image',
     media_url: '', media_position: 'below_hero', media_autoplay: false,
     media_overlay: false, media_thumbnail_url: '', hero_visible: true,
     show_similar_products: true,
@@ -163,6 +163,8 @@ export default function DevPage() {
     banner_interval: 3,
     banner_ratio: '16/5',
     banner_position: 'below_hero',
+    banner_transition: 'fade',
+    product_transition: 'fade',
     show_contact_nav: true,
     show_email_signup: true,
     show_contact_feature: true,
@@ -217,6 +219,7 @@ export default function DevPage() {
         store_name: data.store_name || '', accent_color: data.accent_color || '#C0392B',
         hero_headline: data.hero_headline || '', hero_subtext: data.hero_subtext || '',
         hero_emoji: data.hero_emoji || '', hero_image_url: data.hero_image_url || '',
+        favicon_url: data.favicon_url || '',
         media_active: data.media_active || false, media_type: data.media_type || 'image',
         media_url: data.media_url || '', media_position: data.media_position || 'below_hero',
         media_autoplay: data.media_autoplay || false, media_overlay: data.media_overlay || false,
@@ -229,6 +232,8 @@ export default function DevPage() {
         banner_interval: data.banner_interval || 3,
         banner_ratio: data.banner_ratio || '16/5',
         banner_position: data.banner_position || 'below_hero',
+        banner_transition: data.banner_transition || 'fade',
+        product_transition: data.product_transition || 'fade',
         show_contact_nav: data.show_contact_nav !== false,
         show_email_signup: data.show_email_signup !== false,
         show_contact_feature: data.show_contact_feature !== false,
@@ -321,6 +326,7 @@ export default function DevPage() {
       id: settingsId,
       store_name: settingsForm.store_name,
       accent_color: settingsForm.accent_color,
+      favicon_url: settingsForm.favicon_url,
       hero_headline: settingsForm.hero_headline,
       hero_subtext: settingsForm.hero_subtext,
       hero_emoji: settingsForm.hero_emoji,
@@ -344,6 +350,8 @@ export default function DevPage() {
       banner_interval: settingsForm.banner_interval,
       banner_ratio: settingsForm.banner_ratio,
       banner_position: settingsForm.banner_position,
+      banner_transition: settingsForm.banner_transition,
+      product_transition: settingsForm.product_transition,
       show_contact_nav: settingsForm.show_contact_nav,
       show_email_signup: settingsForm.show_email_signup,
       show_contact_feature: settingsForm.show_contact_feature,
@@ -434,7 +442,23 @@ export default function DevPage() {
           <p style={{ fontSize: 12, color: D.textMuted, marginBottom: 28 }}>Design controls. Delete this page after handoff to lock the design permanently.</p>
 
           <Section title="Store Identity">
-            <Row label="Store Name"><input value={settingsForm.store_name} onChange={e => sf('store_name', e.target.value)} style={inputStyle} /></Row>
+            <Row label="Store Name" hint="This becomes the browser tab title"><input value={settingsForm.store_name} onChange={e => sf('store_name', e.target.value)} style={inputStyle} /></Row>
+            <Row label="Favicon" hint="The small icon shown in the browser tab. Use a square image — PNG, SVG, or ICO. Recommended: 64×64px or 512×512px.">
+              <input type="file" accept="image/*,.ico" onChange={async e => {
+                const f = e.target.files?.[0]; if (!f) return
+                const ext = f.name.split('.').pop()
+                const name = `favicon-${Date.now()}.${ext}`
+                const { error } = await supabase.storage.from('product-images').upload(name, f)
+                if (!error) { const { data: ud } = supabase.storage.from('product-images').getPublicUrl(name); sf('favicon_url', ud.publicUrl) }
+              }} style={{ ...inputStyle, marginBottom: 6 }} />
+              {settingsForm.favicon_url && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6 }}>
+                  <img src={settingsForm.favicon_url} alt="Favicon" style={{ width: 32, height: 32, objectFit: 'contain', borderRadius: 4, background: '#fff', padding: 2, border: `1px solid ${D.border}` }} />
+                  <span style={{ fontSize: 11, color: D.textMuted }}>Shows in browser tab</span>
+                  <button onClick={() => sf('favicon_url', '')} style={{ background: 'none', border: `1px solid ${D.border}`, borderRadius: 6, padding: '3px 8px', fontSize: 11, cursor: 'pointer', color: '#ff6b6b' }}>Remove</button>
+                </div>
+              )}
+            </Row>
             <Row label="Logo Image">
               <input type="file" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (!f) return; setLogoFile(f); setLogoPreview(URL.createObjectURL(f)) }} style={{ ...inputStyle, marginBottom: 6 }} />
               {logoPreview && (
@@ -527,6 +551,12 @@ export default function DevPage() {
                   { value: '1/1', label: 'Square' },
                 ]} hint="Controls how tall the banner is" />
                 <SliderRow label="Seconds per slide" value={settingsForm.banner_interval} min={2} max={8} unit="s" onChange={v => sf('banner_interval', v)} hint="How long each image shows before auto-advancing" />
+                <ChipRow label="Slide Transition" value={settingsForm.banner_transition || 'fade'} onChange={v => sf('banner_transition', v)} options={[
+                  { value: 'fade', label: '○ Fade' },
+                  { value: 'slide', label: '→ Slide' },
+                  { value: 'zoom', label: '⊕ Zoom' },
+                  { value: 'flip', label: '↻ Flip' },
+                ]} hint="How images transition between each other" />
                 <Row label={`Banner Images (${bannerImages.length}/5)`} hint="Upload up to 5 images. Each image can have an optional click-through link.">
                   {bannerImages.length < 5 && (
                     <div style={{ marginBottom: 12 }}>
@@ -770,6 +800,12 @@ export default function DevPage() {
 
           <Section title="Product Page">
             <ToggleRow label={settingsForm.show_similar_products ? '✓ Show similar products' : '✗ Hide similar products'} value={settingsForm.show_similar_products} onChange={v => sf('show_similar_products', v)} />
+            <ChipRow label="Image Gallery Transition" value={(settingsForm as any).product_transition || 'fade'} onChange={v => sf('product_transition', v)} options={[
+              { value: 'fade', label: '○ Fade' },
+              { value: 'slide', label: '→ Slide' },
+              { value: 'zoom', label: '⊕ Zoom' },
+              { value: 'flip', label: '↻ Flip' },
+            ]} hint="How product images transition when clicking thumbnails or swiping" />
           </Section>
 
           <Section title="Sort Options">
