@@ -110,7 +110,7 @@ export default function AdminPage() {
   const [editImages, setEditImages] = useState<string[]>([]); const [editNewFiles, setEditNewFiles] = useState<File[]>([]); const [editNewPreviews, setEditNewPreviews] = useState<string[]>([])
   const [showEditModal, setShowEditModal] = useState(false)
   const [imageFiles, setImageFiles] = useState<File[]>([]); const [imagePreviews, setImagePreviews] = useState<string[]>([])
-  const [form, setForm] = useState({ name: '', description: '', price: '', sale_price: '', sale_badge_type: 'percent_off', category: 'General', sold: false, stock: 0, has_variants: false })
+  const [form, setForm] = useState({ name: '', description: '', price: '', sale_price: '', sale_badge_type: 'percent_off', category: '', sold: false, stock: 0, has_variants: false })
   const [policies, setPolicies] = useState<Policy[]>([]); const [showPolicyModal, setShowPolicyModal] = useState(false)
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null); const [policyForm, setPolicyForm] = useState({ title: '', content: '' })
   const [editVariants, setEditVariants] = useState<Variant[]>([]); const [variantsLoading, setVariantsLoading] = useState(false)
@@ -219,7 +219,13 @@ export default function AdminPage() {
     const { data } = await supabase.from('products').select('*').order('sort_order', { ascending: true }).order('created_at', { ascending: false })
     setProducts(data || [])
   }
-  async function fetchCategories() { const { data } = await supabase.from('categories').select('*').order('created_at', { ascending: true }); setCategories(data?.map(c => c.name) || []) }
+  async function fetchCategories() {
+    const { data } = await supabase.from('categories').select('*').order('created_at', { ascending: true })
+    const names = data?.map(c => c.name) || []
+    setCategories(names)
+    // Default the add-product form to the first category if none selected yet
+    if (names.length > 0) setForm(f => f.category && names.includes(f.category) ? f : { ...f, category: names[0] })
+  }
   async function fetchAnnouncement() { const { data } = await supabase.from('announcement').select('*').single(); if (data) { setAnnouncement(data); setAnnouncementText(data.message) } }
   async function fetchPolicies() { const { data } = await supabase.from('policies').select('*').order('order', { ascending: true }); setPolicies(data || []) }
   async function fetchContactSubmissions() {
@@ -341,6 +347,7 @@ export default function AdminPage() {
   }
   async function handleSubmit() {
     if (!form.name || !form.price) { setError('Name and price are required.'); return }
+    if (!form.category) { setError('Please create a category first, then select it.'); return }
     setLoading(true); setError('')
     const uploadedUrls: string[] = []
     for (const file of imageFiles) {
@@ -353,7 +360,7 @@ export default function AdminPage() {
     const maxOrder = products.length > 0 ? Math.max(...products.map(p => p.sort_order || 0)) + 1 : 0
     const { error: insertError } = await supabase.from('products').insert([{ name: form.name, description: form.description, price: parseFloat(form.price), sale_price: salePrice, sale_badge_type: salePrice ? form.sale_badge_type : null, category: form.category, sold: form.sold, stock: form.has_variants ? 0 : form.stock, has_variants: form.has_variants, image_url: uploadedUrls[0] || '', images: uploadedUrls, sort_order: maxOrder }])
     if (insertError) setError('Failed to add product.')
-    else { setSuccess('Product added!'); setForm({ name: '', description: '', price: '', sale_price: '', sale_badge_type: 'percent_off', category: 'General', sold: false, stock: 0, has_variants: false }); setImageFiles([]); setImagePreviews([]); fetchProducts(); setTimeout(() => setSuccess(''), 3000) }
+    else { setSuccess('Product added!'); setForm({ name: '', description: '', price: '', sale_price: '', sale_badge_type: 'percent_off', category: categories[0] || '', sold: false, stock: 0, has_variants: false }); setImageFiles([]); setImagePreviews([]); fetchProducts(); setTimeout(() => setSuccess(''), 3000) }
     setLoading(false)
   }
   async function deleteProduct(id: string) { if (!confirm('Delete this product?')) return; await supabase.from('products').delete().eq('id', id); fetchProducts() }
@@ -617,6 +624,11 @@ export default function AdminPage() {
           {/* ADD PRODUCT */}
           <Panel C={C} isDark={isDark} style={{ height: 'fit-content' }}>
             <SectionTitle C={C}>Add a Product</SectionTitle>
+            {categories.length === 0 && (
+              <div style={{ background: '#FEF3CD', color: '#6B4F00', border: '1px solid #E0C068', padding: '12px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
+                ⚠️ Create a category first (in the "Manage Categories" section) before adding products. Every product needs a category.
+              </div>
+            )}
             {success && <div style={{ background: C.success, color: C.successText, border: `1px solid ${C.successBorder}`, padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, marginBottom: 16 }}>✓ {success}</div>}
             {error && <div style={{ background: C.error, color: C.errorText, border: `1px solid ${C.errorBorder}`, padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, marginBottom: 16 }}>{error}</div>}
             <Label C={C}>Product Name *</Label>
@@ -654,8 +666,8 @@ export default function AdminPage() {
               <input type="checkbox" id="sold" checked={form.sold} onChange={e => setForm({ ...form, sold: e.target.checked })} style={{ accentColor: accent }} />
               <label htmlFor="sold" style={{ fontSize: 13, color: C.text, cursor: 'pointer' }}>Mark as sold</label>
             </div>
-            <button onClick={handleSubmit} disabled={loading} style={{ width: '100%', background: accent, color: '#fff', border: 'none', borderRadius: 8, padding: 12, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', fontSize: 14, opacity: loading ? 0.7 : 1, boxShadow: `0 4px 16px ${accent}44` }}>
-              {loading ? 'Adding...' : '+ Add Product'}
+            <button onClick={handleSubmit} disabled={loading || categories.length === 0} style={{ width: '100%', background: accent, color: '#fff', border: 'none', borderRadius: 8, padding: 12, fontWeight: 700, cursor: (loading || categories.length === 0) ? 'not-allowed' : 'pointer', fontSize: 14, opacity: (loading || categories.length === 0) ? 0.5 : 1, boxShadow: `0 4px 16px ${accent}44` }}>
+              {loading ? 'Adding...' : categories.length === 0 ? 'Create a category first' : '+ Add Product'}
             </button>
           </Panel>
 
