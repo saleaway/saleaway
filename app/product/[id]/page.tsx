@@ -158,7 +158,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
               onMouseLeave={() => setGalleryHovered(false)}
               style={{ position: 'relative', marginBottom: 12 }}>
               {/* Inner wrapper clips the image transitions */}
-              <div style={{ position: 'relative', borderRadius: t.radius_card, overflow: 'hidden', background: t.bg_card, boxShadow: shadow, perspective: '1200px' }}>
+              <div style={{ position: 'relative', borderRadius: t.radius_card, overflow: 'hidden', background: t.bg_card, boxShadow: shadow, perspective: '1200px', aspectRatio: isMobile ? '4/3' : '1' }}>
               {(() => {
                 const transitionType = settings?.product_transition || 'fade'
                 const tr = transPhase === 'go' ? '0.6s cubic-bezier(0.4,0,0.2,1)' : 'none'
@@ -188,7 +188,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
                 return (
                   <>
                     <img src={mainImage || 'https://via.placeholder.com/600x500?text=No+Image'} alt={product.name}
-                      style={{ ...imgStyle(true), aspectRatio: isMobile ? '4/3' : '1', position: transPhase !== 'idle' ? 'absolute' : 'relative' }}
+                      style={{ ...imgStyle(true), width: '100%', height: '100%', position: 'absolute', inset: 0 }}
                       onTransitionEnd={onGalleryTransitionEnd}
                       onTouchStart={e => { (e.currentTarget as any)._touchX = e.touches[0].clientX }}
                       onTouchEnd={e => {
@@ -201,7 +201,6 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
                       <img src={nextImageRef.current} alt={product.name + ' next'}
                         style={{ ...imgStyle(false), aspectRatio: isMobile ? '4/3' : '1' }} />
                     )}
-                    {transPhase !== 'idle' && <div style={{ width: '100%', aspectRatio: isMobile ? '4/3' : '1' }} />}
                   </>
                 )
               })()}
